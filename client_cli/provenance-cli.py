@@ -10,6 +10,7 @@
 # |       Misha Ahmadian (misha.ahmadian@ttu.edu)        |
 # |------------------------------------------------------|
 #
+from getopt import getopt, GetoptError
 import urllib.request, urllib.error
 from collections import OrderedDict
 from subprocess import Popen, PIPE
@@ -238,7 +239,6 @@ class RESTful_API:
             # --------------- MDS Dynamic Table ------------------
             mds_list = data["mds_data"]
             mds_map = {}
-            mds_table = []
 
             # Map all the MDS Data into their MDS Server
             for mdsData in mds_list:
@@ -308,11 +308,11 @@ class RESTful_API:
             # Create File OP Table
             for mdt_target, fileop_lst in fileop_map.items():
                 data_table += f"[Files on ({mdt_target})]\n"
-                headers = ["Date/Time", "From", "OP", "Mode", "File/Dir Path"]
+                headers = ["Date/Time", "Node", "OP", "Mode", "File/Dir Path"]
                 table = []
                 for fileobj in fileop_lst:
                     row = [
-                        datetime.fromtimestamp(int(fileobj["timestamp"])).strftime("%m-%d-%Y\n%H:%M:%S"),
+                        datetime.fromtimestamp(int(fileobj["timestamp"])).strftime("%m.%d.%Y %H:%M:%S"),
                         fileobj["nid"] if fileobj["nid"] else "N/A",
                         fileobj["op_type"] if fileobj["op_type"] != "UNLNK" else "REMOVE",
                         fileobj["open_mode"],
@@ -438,7 +438,8 @@ class ProvenanceShell(Cmd):
         super(ProvenanceShell, self).__init__()
         # The Introduction Header
         self.intro = "|=============================================|\n" \
-                     "|   Provenance Command Line Interface v.1.0   |\n" \
+                     "|      Provenance Command Line Interface      |\n" \
+                     "|                   v.1.0                     |\n" \
                      "|      High Performance Computing Center      |\n" \
                      "|            Texas Tech University            |\n" \
                      "|=============================================|\n"
@@ -469,15 +470,11 @@ class ProvenanceShell(Cmd):
         # Create a Session for thi Interactive Shell
         self.session = self.Session()
 
-    def do_test(self, arg):
-        # response = self.rest_api.get("/schema")
-        # print(response)
-        print(str(arg))
 
     def help_show(self):
         help_msg = """
 NAME:
-    show - Get a list of OSS(s)/MDS(s) servers abd their OST(s)/MDT(s) targets
+    show - Get a list of OSS(s)/MDS(s) servers and their OST(s)/MDT(s) targets
 
 SYNOPSIS
     show
@@ -557,8 +554,8 @@ NAME
     select - select OSS/MDS server, OST/MDT target if applicable, or jobs
     
 SYNOPSIS
-    select [server | [target]] server/target
-    select server
+    select [server | [target]] <server_name>|<target_name>
+    select <server_name>|<target_name>
     select jobs
     
 DESCRIPTION
@@ -580,64 +577,99 @@ EXAMPLE
         """
             Select a Server, Target or Jobs mode
         """
+        #
+        # Set the OSS/MDS server and modify the session
+        #
+        def set_server(server_name):
+            # nonlocal args
+            # server = args[1] if len(args) > 1 else args[0]
+            # Find the Type of the selected server
+            if server_name in self.lustre_schema.get('mds').keys():
+                serverType = 'mds'
+            elif server_name in self.lustre_schema.get('oss').keys():
+                serverType = 'oss'
+            else:
+                # Ignore Wrong Argument
+                self._error(f"'{server_name}' is not a correct server name")
+                return
+
+            targetList = self.lustre_schema.get(serverType, {}).get(server_name, None)
+
+            # Update current session
+            self.session.updateServerMode(serverType, server_name, targetList)
+        #
+        # Set the OSS/MDT target and modify the session
+        #
+        def set_target(target_name):
+            #nonlocal args
+            # if len(args) == 1:
+            #     self._error("'select target' has not enought arguments: [select target <TARGET>]")
+            #     return
+            # The current state hast to be in SERVER or TARGET mode
+            if self.session.mode not in [self.Mode.SERVER, self.Mode.TARGET]:
+                self._error(f"No Server has been selected for ({target_name}) target")
+                return
+
+            # Get the list of available targets:
+            serverName = self.session.serverName
+            targetList = self.session.targetList
+
+            # Ignore Wrong Argument
+            if target_name not in targetList:
+                self._error(f"'{target_name}' is not a MDT target of ({serverName}) server")
+                return
+
+            # Update Current Session
+            self.session.updateTargetMode(target_name)
+        #
+        # The Main Section
+        #
         # Parse Arguments
         args = self._parse_arg(arg)
         # At least one argument
         if len(args) < 1:
             self._error("'select' command requires at least one argument\n"
                         "  + select <server|target> arg\n"
-                        "  + select {server}\n"
+                        "  + select {server/target}\n"
                         "  + select jobs")
             return
         # Too many arguments
         if len(args) > 2:
             self._error("Too many arguments for 'select'\n"
                         "  + select <server|target> arg\n"
-                        "  + select {server}\n"
+                        "  + select {server/target}\n"
                         "  + select jobs")
             return
 
-        # ----------- SERVER -----------
-        if (len(args) == 1 and args[0] != 'jobs') or (args[0] == 'server' if len(args) > 1 else None):
-
-            server = args[1] if len(args) > 1 else args[0]
-            # Find the Type of the selected server
-            if server in self.lustre_schema.get('mds').keys():
-                serverType = 'mds'
-            elif server in self.lustre_schema.get('oss').keys():
-                serverType = 'oss'
+        # ----------- No arg: Server/Target -----------
+        if len(args) == 1 and args[0] not in ['server', 'target', 'jobs']:
+            select_arg = args[0]
+            # Check if The selected argument exists among OSS/MDS servers
+            if select_arg in self.lustre_schema.get('mds').keys() or \
+                select_arg in self.lustre_schema.get('oss').keys():
+                # Then select it as a server
+                set_server(select_arg)
+            # Check if The selected argument exists among current OSTs/MDSs
+            elif select_arg in self.session.targetList:
+                # Then select it as target
+                set_target(select_arg)
             else:
-                # Ignore Wrong Argument
-                self._error(f"'{server}' is not a correct server name")
+                self._error(f"The '{select_arg}' is not a server nor an available target")
                 return
 
-            targetList = self.lustre_schema.get(serverType, {}).get(server, None)
-
-            # Update current session
-            self.session.updateServerMode(serverType, server, targetList)
+        # ----------- SERVER -----------
+        elif args[0] == 'server':
+            if len(args) == 1:
+                self._error("'select server' has not enought arguments: [select server <server_name>]")
+                return
+            set_server(args[1])
 
         #----------- TARGET ------------
         elif args[0] == 'target':
             if len(args) == 1:
-                self._error("'select target' has not enought arguments: [select target <TARGET>]")
+                self._error("'select target' has not enought arguments: [select target <target_name>]")
                 return
-            # The current state hast to be in SERVER or TARGET mode
-            if self.session.mode not in [self.Mode.SERVER, self.Mode.TARGET]:
-                self._error(f"No Server has been selected for ({args[1]}) target")
-                return
-
-            # Get the list of available targets:
-            serverName = self.session.serverName
-            targetList = self.session.targetList
-            target = args[1]
-
-            # Ignore Wrong Argument
-            if target not in targetList:
-                self._error(f"'{target}' is not available in ({serverName}) targets")
-                return
-
-            # Update Current Session
-            self.session.updateTargetMode(target)
+            set_target(args[1])
 
         # -------- JOBS -------------
         elif args[0] == 'jobs':
@@ -659,7 +691,42 @@ EXAMPLE
         self._update_prompt()
 
 
-    def do_list(self, args):
+    def help_jobs(self):
+        help_msg = """
+NAME
+    jobs - lists all the jobs for current selected OSS/MDS server ot OST/MDT Target
+    
+SYNOPSIS
+    jobs [-jtsdf][-js] content
+    jobs [--jobid][--taskid][--job-status][--files][--days][--sort] content
+    
+DESCRIPTION
+    Once an OSS/MDS server or a MDT/OST target is selected, the 'jobs' command can list all the
+    jobs for that particular OSS/OST or MDS/MDT. By defualt, the 'jobs' command lists all the 
+    current RUNNING jobs on these servers/targets. If a MDT/OST is selected, then list of the jobs 
+    will be filtered for that selected target.
+    
+    The following options are available:
+    
+    -j, --jobid <job_id>        shows the record of this particular job with <job_id>
+    
+    -t, --taskid <task_id>      shows the record of this particular array job with <job_id>, <task_id>
+                                Once the <task_id> was specified, the <job_id> must be defined as well.
+                                (Note that the <job_id> alone will never show an array job withou taskid)
+                                
+    -js, --job_status <status>  Search for the jobs in RUNNING or FINISHED states. <status> can be defined 
+                                as ['r', 'R'] for RUNNING jobs or ['f', 'F'] for FINISHED jobs.
+    
+    -f, --file                  list all the files. This optio  is only available in MDT mode.
+    
+    -d, --days <N>              Lists all the records fo N days ago.
+    
+    -s, --sort <filed>          Sort the list based on the filed name.
+    
+        """
+        print(help_msg)
+
+    def do_jobs(self, args):
         """
             Query and Get requested data from Provenance API, and print the output
             in a tabulate format
@@ -669,12 +736,12 @@ EXAMPLE
             self._error("Please select a server, server/target/ or jobs")
             return
         # Parse Arguments
-        args_map = self._pars_list_args(args)
+        args_map = self._pars_jobs_args(args)
         if args_map.get("error", None):
             self._error(args_map["error"])
             return
 
-        list_cmd = args_map.pop('cmd')
+        has_files = 'files' in args_map
         #--------------- Server Mode -----------------
         if self.session.mode in [self.Mode.SERVER, self.Mode.TARGET]:
             # # Make a header
@@ -683,11 +750,10 @@ EXAMPLE
             #************ OSS Servers **********
             if self.session.serverType == "oss":
                 # list cannot get file ops on OSSs
-                if list_cmd == "files":
-                    self._error("File operations are not available on OSS servers")
+                if has_files:
+                    self._error("Files can be shown only for MDT targets on MDS servers")
                     return
-
-                elif list_cmd == "jobs":
+                else:
                     data_table = self.rest_api.get_oss_jobs_table(self.session.serverName,
                                                                   target=self.session.targetName, **args_map)
 
@@ -695,36 +761,87 @@ EXAMPLE
 
             # ************ MDS Servers **********
             if self.session.serverType == "mds":
-                if list_cmd == "jobs":
-                    data_table = self.rest_api.get_mds_jobs_table(self.session.serverName,
-                                                                  target=self.session.targetName, **args_map)
-                    self._paginate_output(data_table)
-                    
-                elif list_cmd == "files":
+                if has_files:
                     if self.session.mode != self.Mode.TARGET:
                         self._error("Please select a MDT target to list available file operations")
                         return
 
-                    # Request for files:
-                    args_map.update({'files': 'y'})
                     data_table = self.rest_api.get_mds_files_Table(self.session.serverName,
+                                                                  target=self.session.targetName, **args_map)
+                    self._paginate_output(data_table)
+
+                else:
+                    data_table = self.rest_api.get_mds_jobs_table(self.session.serverName,
                                                                   target=self.session.targetName, **args_map)
                     self._paginate_output(data_table)
 
         #--------------- Jobs Mode -----------------
         elif self.session.mode ==  self.Mode.JOBS:
 
-            if list_cmd == "files":
-                self._error("File Operations will appear once a single job is listed for details")
+            if has_files:
+                self._error("Files can be shown only for MDT targets on MDS servers")
                 return
 
-            elif list_cmd == "jobs":
-                if "jobid" in args_map.keys():
-                    data_table = self.rest_api.get_job_detail(args_map.get("jobid"), args_map.get("taskid", None))
-                else:
-                    data_table = self.rest_api.get_all_jobs(**args_map)
-
+            else:
+                data_table = self.rest_api.get_all_jobs(**args_map)
                 self._paginate_output(data_table)
+
+
+    def help_jobinfo(self):
+        help_msg = """
+NAME
+    jobinfo - returns all the provenance information of a job
+    
+SYNOPSIS
+    jobinfo -j <job_id> [-t <task_id>]
+    jobinfo --jobid <job_id> [--taskid <task_id>]
+    
+DESCRIPTION
+    The 'jobinfo' command collects all the provenance information of a job including
+    the I/O statistics of the job on OSSs/OSTs and metadata activities on MDSs/MDTs.
+    It also provides some information regarding the job scheduler and lists all the
+    File Operations that have been done by the selected job. (Please notice that it
+    is necessary to select the <task_id> if the job is an array job.)
+        """
+        print(help_msg)
+
+
+    def do_jobinfo(self, args):
+        """
+            Show all the details regarding a job
+        """
+        args_map = {'jobid': None, 'taskid': None}
+        arg_list = args.strip().split()
+        # jobinfo needs at least one argument
+        if not arg_list:
+            self._error("Please choose a job_id (and a task_id if applicable).\n "
+                        "For more information please refer to the help manual of 'jobinfo'")
+        try:
+            # Parse the arguments
+            opts, remain = getopt(arg_list, 'j:t:', ['jobid', 'taskid'])
+            # No non-argument input
+            if remain:
+                self._error(f"The '{remain}' is not a valid option")
+            # Collect options and their values
+            for opt, value in opts:
+                for key in args_map.keys():
+                    if opt in [f"--{key}", f"-{key[0]}"]:
+                        if not value:
+                            self._error(f"Please specify a value for '{opt}' option")
+                            return
+                        args_map[key] = value
+                        break
+
+            # The jobid has to be selected
+            if not args_map['jobid']:
+                self._error("(-j, --jobid <job_id>) is missing")
+
+            # Get the JobInfo details from Provenance API
+            data_table = self.rest_api.get_job_detail(args_map.get("jobid"), args_map.get("taskid", None))
+            self._paginate_output(data_table)
+
+        except GetoptError as getopExp:
+            self._error(f"{getopExp}")
 
 
     def help_back(self):
@@ -763,7 +880,28 @@ EXAMPLE
     def do_help(self, arg: str):
         """ (help): Show the help info for the given command"""
         if not arg:
-            print("This is the help")
+            help_msg ="""
+    Welcome to The PRovenance Command Line Interface (Shell). The Provenance Software Stack consists
+    of several distributed components which collect I/O statistics and File Operations of Cluster jobs
+    from different Lustre Servers (i.e. OSS/MDS) and after aggregate the data stores them into database.
+    
+    This Command line interface allows system administrators to trace down the jobs on OSS/MDS servers
+    and provides all the details regarding the jobs' status, IOPs on OSS servers, metadata activity on
+    MDS servers, and File Operations per job. 
+    
+    Following command are availabe:
+    
+        - help      Shows this help message.
+        - show      Shows a list of OSS(s)/MDS(s) servers and their OST(s)/MDT(s) targets.
+        - select    Selects OSS/MDS server, OST/MDT target if applicable, or jobs.
+        - jobs      Lists all the jobs for current selected OSS/MDS server ot OST/MDT Target.
+        - jobinfo   Returns all the provenance information of a job.
+        - back      Returns one level back up in the server/target hierarchy.
+        - exit      Exits the command line interface. 
+        
+    *** For more information regarding each command above, type 'help <command>' to get a help manual
+            """
+            print(help_msg)
         else:
             # Once the arg was defined, then show the help for arg (command)
             super().do_help(arg)
@@ -808,30 +946,27 @@ EXAMPLE
         return ars_list
 
     @staticmethod
-    def _pars_list_args(arg: str):
+    def _pars_jobs_args(arg: str):
         arg_map = OrderedDict()
         # A map of valid arguments that work with list command
         valid_ops = {"jobid": ['-j', '--jobid'], "taskid": ['-t', '--taskid'], "sort": ['-s', '--sort'],
                       "js": ['-js', '--job-status'],  "days": ['-d', '--days']}
-        # List of valid commands for 'list'
-        valid_cmds = ['jobs', 'files']
+
+        valid_status = {"RUNNING": ['r', 'R'], "FINISHED": ['f', 'F']}
         # Convert args to list
         arg_list = arg.strip().split()
-        # 'list' requires at least one command
-        if not len(arg_list):
-            return {"error": f"'list' requires at least one command to execute"}
-        # Check if the command is valid
-        if arg_list[0] not in valid_cmds:
-            return {"error": f"The '{arg_list[0]}' is not a valid command for 'list'"}
-        # Add command
-        arg_map.update({"cmd": arg_list[0]})
-        # Get all options
-        ops_list = arg_list[1:]
-        # collect arg_map
-        for inx, _ in enumerate(ops_list):
-            option = ops_list[inx]
+
+        # The -f, --files has no argument and can be considered as a command
+        for inx, opt in enumerate(arg_list):
+            if opt in ['-f', '--files']:
+                arg_list.pop(inx)
+                arg_map.update({'files': 'y'})
+
+        # collect all other arguments and create arg_map
+        for inx, _ in enumerate(arg_list):
+            option = arg_list[inx]
             # Expected to be option:
-            if not inx % 2: # Odd arguments (even index!)
+            if not inx % 2: # Odd arguments (with even index!)
 
                 if not option.startswith('-'):
                     return {"error": f"The '{option}' is not a valid option for 'list'"}
@@ -845,15 +980,36 @@ EXAMPLE
 
             else: # Even arguments must be values
                 last_key = list(arg_map.keys())[-1]
-                last_option = ops_list[inx-1]
+                last_option = arg_list[inx-1]
                 if option.startswith('-'):
                     return {"error": f"The '{option}' is not a valid value for '{last_option}'"}
                 arg_map.update({last_key: option})
 
-        # Make sure all the items have a value:
+        # Verify the options and their arguments
         for key, value in arg_map.items():
+            # Make sure all the items have a value:
             if not value:
-                return {"error": f"The '{ops_list[(list(arg_map.keys()).index(key) - 1) * 2]}' option has no value"}
+                return {"error": f"The '{key}' option has no value"}
+
+            # verify the selected 'status' if -js was selected
+            if key == 'js':
+                for status, opts in valid_status.items():
+                    # Replace the js value with the right criteria
+                    if value in opts:
+                        arg_map.update({'js': status})
+                        break
+                else:
+                    return {"error": f"The '{value}' is not valid argument for '{key}' option."}
+
+            # Number of days must be >1
+            if key == 'days':
+                if int(value) < 1:
+                    return {"error": f"The Number of days cannot be less than '1'"}
+
+        # For finished jobs the number of days ago must be selected
+        if arg_map.get('js', None) == "FINISHED" and not arg_map.get('days', None):
+            return {"error": f"For 'FINISHED' jobs [-d, --days] option must be defined"}
+
         # Return arg_map
         return arg_map
 
