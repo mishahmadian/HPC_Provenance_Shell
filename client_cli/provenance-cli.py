@@ -279,7 +279,7 @@ class RESTful_API:
 
             # Create OSS Tables
             for oss, ossDataLst in oss_map.items():
-                data_table += f"[MDS: {oss}]\n"
+                data_table += f"[OSS: {oss}]\n"
 
                 headers = [title for inx in range(len(ossDataLst))
                             for title in [f"({ossDataLst[inx].pop('ost_target')})", "Stats"]]
@@ -489,9 +489,6 @@ DESCRIPTION
 EXAMPLES
     Provenance> show
         List of available servers that can be selected:
-         - MDS Servers:
-           +- mgs
-
          - OSS Servvers:
            +- oss1
            +- oss2
@@ -822,6 +819,7 @@ DESCRIPTION
             # No non-argument input
             if remain:
                 self._error(f"The '{remain}' is not a valid option")
+                return
             # Collect options and their values
             for opt, value in opts:
                 for key in args_map.keys():
