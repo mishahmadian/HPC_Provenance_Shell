@@ -26,8 +26,11 @@ import sys
 #========== Global Variables ===========
 API_SERVER_ADDR = "129.118.104.152"
 API_SERVER_PORT = "5000"
-CLUSTER_NAME = "genius"
-SCHEDULER = "uge"
+CLUSTERS_SCHED = {
+    "genius": "uge",
+    "quanah": "uge",
+    "hrothgar": "uge"
+}
 #=======================================
 
 class RESTful_API:
@@ -45,10 +48,14 @@ class RESTful_API:
             Send a 'GET' request to Provenance Restful Server
         """
         try:
+            # Waiting Notification
+            print(f" {Color.ORANGE}Please Wait... \r{Color.NO_COLOR}", end='', flush=True)
             # Generate the proper request URL
             req_url = self._gen_api_url(url_cmd, **kwargs)
             # Send request and get response
             response = urllib.request.urlopen(req_url)
+            # Clear Waiting notification
+            print(" " * 20, end='\r')
             if response:
                 # Decode the response and jsonify
                 resp = json.loads(response.read().decode(response.info().get_param('charset') or 'utf-8'))
@@ -61,11 +68,13 @@ class RESTful_API:
             if httpexp.code in ignore_codes:
                 pass
 
-        except urllib.error.URLError as urlexp:
+        except urllib.error.URLError:
+            print(" " * 20, end='\r')
             print("\n [Error] Provenance Cli cannot connect to the API server\n")
             sys.exit(1)
 
         except Exception as exp:
+            print(" " * 20, end='\r')
             print(str(exp))
             sys.exit(1)
 
@@ -81,16 +90,16 @@ class RESTful_API:
 
         # tabulate results
         if results:
-            headers = ["JobID", "TaskID", "User", "Stauts", "Read OPs", "Total Read Size",
+            headers = ["Cluster", "JobID", "TaskID", "User", "Stauts", "Read OPs", "Total Read Size",
                        "Write OPs", "Total Write Size"]
             if not target: headers.append("OST")
             table = []
             for data in results:
-                row = [data["job_info"][0]["jobid"], data["job_info"][0]["taskid"], data["job_info"][0]["username"],
-                    data["job_info"][0]["status"], data["read_bytes"], self._convert_from_byte(data["read_bytes_sum"]),
-                    data["write_bytes"], self._convert_from_byte(data["write_bytes_sum"])]
+                row = [data["cluster"], data["jobid"], data["taskid"], data["username"], data["status"],
+                       data["oss_info"]["read_bytes"], self._convert_from_byte(data["oss_info"]["read_bytes_sum"]),
+                       data["oss_info"]["write_bytes"], self._convert_from_byte(data["oss_info"]["write_bytes_sum"])]
 
-                if not target: row.append(data["ost_target"])
+                if not target: row.append(data["oss_info"]["ost_target"])
                 table.append(row)
             # Make a Table
             return tabulate(table, headers=headers, tablefmt="simple", stralign="right", numalign="right")
@@ -110,15 +119,20 @@ class RESTful_API:
 
         # tabulate results
         if results:
-            headers = ["JobID", "TaskID", "User", "Stauts", "Open/Close", "Get/Set Attr", "mkdir/rmdir", "rm/unlink"]
+            headers = ["Cluster", "JobID", "TaskID", "User", "Stauts", "Open/Close", "Get/Set Attr",
+                       "rm/unlink", "mkdir/rmdir", "statfs"]
+
             if not target: headers.append("MDT")
             table = []
             for data in results:
-                row = [data["job_info"][0]["jobid"], data["job_info"][0]["taskid"], data["job_info"][0]["username"],
-                       data["job_info"][0]["status"], f"{data['open']}/{data['close']}",
-                       f"{data['getattr']}/{data['setattr']}", f"{data['mkdir']}/{data['rmdir']}", f"{data['unlink']}"]
+                row = [data["cluster"], data["jobid"], data["taskid"], data["username"], data["status"],
+                       f"{data['mds_info']['open']}/{data['mds_info']['close']}",
+                       f"{data['mds_info']['getattr']}/{data['mds_info']['setattr']}",
+                       f"{data['mds_info']['unlink']}",
+                       f"{data['mds_info']['mkdir']}/{data['mds_info']['rmdir']}",
+                       f"{data['mds_info']['statfs']}"]
 
-                if not target: row.append(data['mdt_target'])
+                if not target: row.append(data['mds_info']['mdt_target'])
                 table.append(row)
             # Make a Table
             return tabulate(table, headers=headers, tablefmt="simple", stralign="right", numalign="right")
@@ -137,18 +151,20 @@ class RESTful_API:
         results = api_response.get("result", None) if api_response else {}
 
         if results:
-            headers = ["JobID", "TaskID", "User", "Stauts", "File/Dir OP", "File/Dir Path"]
+            headers = ["cluster", "JobID", "TaskID", "User", "Stauts", "File/Dir OP", "File/Dir Path"]
             table = []
             for data in results:
                 # Replace the type UNLNK with REMOVE which is more meaningful
-                if data["op_type"] and data["op_type"] == "UNLNK":
-                    data["op_type"] = "REMOVE"
+                if data["fileop_info"]["file_ops"]["op_type"] == "UNLNK":
+                    data["fileop_info"]["file_ops"]["op_type"] = "REMOVE"
 
-                row = [data["job_info"][0]["jobid"], data["job_info"][0]["taskid"], data["job_info"][0]["username"],
-                       data["job_info"][0]["status"], data["op_type"]]
+                row = [data["cluster"], data["jobid"], data["taskid"], data["username"], data["status"],
+                       data["fileop_info"]["file_ops"]["op_type"]]
 
                 # Find the absolute path of the file or directory
-                file_dir_path = self._find_absolute_path(data["target_file"], data["target_path"], data["parent_path"])
+                file_dir_path = self._find_absolute_path(data["fileop_info"]["target_file"],
+                                                         data["fileop_info"]["target_path"],
+                                                         data["fileop_info"]["parent_path"])
 
                 row.append(file_dir_path)
                 table.append(row)
@@ -171,12 +187,12 @@ class RESTful_API:
         results = api_response.get("result", None) if api_response else {}
 
         if results:
-            headers = ["JobID", "TaskID", "JobName", "User", "Stauts", "Project", "PE", "# CPU",
+            headers = ["Cluster", "JobID", "TaskID", "JobName", "User", "Stauts", "Project", "PE", "# CPU",
                        "Submitted", "Started", "Finished"]
             table = []
             for data in results:
-                row = [data["jobid"], data["taskid"], data["jobName"], data["username"], data["status"],
-                       data["project"], data["parallelEnv"], data["num_cpu"]]
+                row = [data["cluster"], data["jobid"], data["taskid"], data["jobName"], data["username"],
+                       data["status"], data["project"], data["parallelEnv"], data["num_cpu"]]
 
                 # Convert epoch timestamps to readable date/time format
                 for timestamp in [data["submit_time"], data["start_time"], data["end_time"]]:
@@ -192,12 +208,12 @@ class RESTful_API:
         # Otherwise Print no output data
         return "** No Result Found **"
 
-    def get_job_detail(self, jobid, taskid=None):
+    def get_job_detail(self, cluster, jobid, taskid, **kwargs):
         """
             Request API and get all the details regarding a job
         """
         # Calculate the uid for the job
-        uid = self._uniqID(jobid, taskid)
+        uid = self._uniqID(cluster, jobid, taskid)
         url_cmd = f"/jobinfo/{uid}"
         # Call the Rest API
         api_response = self.get(url_cmd)
@@ -206,12 +222,12 @@ class RESTful_API:
 
         if results and results[0]:
             data = results[0]
-            data_table = "[JOB INFO]\n\n"
-            headers = ["JobID", "TaskID", "JobName", "User", "Stauts", "Project", "PE", "# CPU",
+            data_table = f"{Color.CYAN}[JOB INFO]{Color.NO_COLOR}\n\n"
+            headers = ["Cluster", "JobID", "TaskID", "JobName", "User", "Stauts", "Project", "PE", "# CPU",
                        "Submitted", "Started", "Finished"]
 
             #--------------- JOB INFO 1st part ------------------
-            row = [data["jobid"], data["taskid"], data["jobName"], data["username"], data["status"],
+            row = [data["cluster"], data["jobid"], data["taskid"], data["jobName"], data["username"], data["status"],
                    data["project"], data["parallelEnv"], data["num_cpu"]]
 
             # Convert epoch timestamps to readable date/time format
@@ -237,95 +253,113 @@ class RESTful_API:
                                           stralign="left", numalign="left") + "\n\n"
 
             # --------------- MDS Dynamic Table ------------------
-            mds_list = data["mds_data"]
-            mds_map = {}
+            # Check and see if MDS data should be included
+            if not kwargs or kwargs.get("mds", False):
+                mds_list = data["mds_data"]
+                mds_map = {}
 
-            # Map all the MDS Data into their MDS Server
-            for mdsData in mds_list:
-                mds = mdsData.pop("mds_host")
-                if mds in mds_map.keys():
-                    mds_map[mds].append(mdsData)
-                else:
-                    mds_map[mds] = [mdsData]
+                # Map all the MDS Data into their MDS Server
+                for mdsData in mds_list:
+                    mds = mdsData["mds_info"].pop("mds_host")
+                    if mds in mds_map.keys():
+                        mds_map[mds].append(mdsData.get("mds_info"))
+                    else:
+                        mds_map[mds] = [mdsData.get("mds_info")]
 
-            # Create MDS Tables
-            for mds, mdsDataLst in mds_map.items():
-                data_table += f"[MDS: {mds}]\n"
-                headers = [title for inx in range(len(mdsDataLst))
-                            for title in [f"({mdsDataLst[inx].pop('mdt_target')})", "Stats"]]
+                # Create MDS Tables
+                for mds, mdsDataLst in mds_map.items():
+                    data_table += f"{Color.PURPLE}[MDS: {mds}]{Color.NO_COLOR}\n"
+                    headers = [title for inx in range(len(mdsDataLst))
+                                for title in [f"({mdsDataLst[inx].pop('mdt_target')})", "Stats"]]
 
-                mdt_table = []
-                for mdsData in mdsDataLst:
-                    col = [[key, str(value)] for key, value in mdsData.items() if key != "file_op"]
-                    mdt_table.append(col)
+                    mdt_table = []
+                    for mdsData in mdsDataLst:
+                        # convert timestamp to Date/Time
+                        mdsData["modified_time"] = datetime.fromtimestamp(
+                            float(mdsData["modified_time"])
+                        ).strftime("%m-%d-%Y\n%H:%M:%S")
 
-                # Create OST Table
-                mds_table = list(map(lambda x: list(chain(*x)), zip(*mdt_table)))
+                        col = [[key, str(value)] for key, value in mdsData.items() if key != "file_op"]
+                        mdt_table.append(col)
 
-                data_table += "\n" + tabulate(mds_table, headers=headers, tablefmt="psql",
-                                              stralign="left", numalign="left") + "\n\n"
+                    # Create MDT Table
+                    mds_table = list(map(lambda x: list(chain(*x)), zip(*mdt_table)))
+
+                    data_table += "\n" + tabulate(mds_table, headers=headers, tablefmt="psql",
+                                                  stralign="left", numalign="left") + "\n\n"
 
             # --------------- OSS Dynamic Table ------------------
-            oss_list = data["oss_data"]
-            oss_map = {}
+            # Check and see if OSS data should be included
+            if not kwargs or kwargs.get("oss", False):
+                oss_list = data["oss_data"]
+                oss_map = {}
 
-            # Map all the OSS Data into their OSS Server name
-            for ossData in oss_list:
-                oss = ossData.pop("oss_host")
-                if oss in oss_map.keys():
-                    oss_map[oss].append(ossData)
-                else:
-                    oss_map[oss] = [ossData]
+                # Map all the OSS Data into their OSS Server name
+                for ossData in oss_list:
+                    oss = ossData["oss_info"].pop("oss_host")
+                    if oss in oss_map.keys():
+                        oss_map[oss].append(ossData.get("oss_info"))
+                    else:
+                        oss_map[oss] = [ossData.get("oss_info")]
 
-            # Create OSS Tables
-            for oss, ossDataLst in oss_map.items():
-                data_table += f"[OSS: {oss}]\n"
+                # Create OSS Tables
+                for oss, ossDataLst in oss_map.items():
+                    data_table += f"{Color.ORANGE}[OSS: {oss}]{Color.NO_COLOR}\n"
 
-                headers = [title for inx in range(len(ossDataLst))
-                            for title in [f"({ossDataLst[inx].pop('ost_target')})", "Stats"]]
-                ost_table = []
-                for ossData in ossDataLst:
-                    col = [[key, self._convert_from_byte(value) if "_bytes_" in key else str(value)]
-                                for key, value in ossData.items()]
-                    ost_table.append(col)
+                    headers = [title for inx in range(len(ossDataLst))
+                                for title in [f"({ossDataLst[inx].pop('ost_target')})", "Stats"]]
+                    ost_table = []
+                    for ossData in ossDataLst:
+                        # convert timestamp to Date/Time
+                        ossData["modified_time"] = datetime.fromtimestamp(
+                            float(ossData["modified_time"])
+                        ).strftime("%m-%d-%Y\n%H:%M:%S")
 
-                # Create OST Table
-                oss_table = list(map(lambda x: list(chain(*x)), zip(*ost_table)))
+                        # Change some titles
+                        ossData["read_bytes"] = f"{ossData['read_bytes']} OPs"
+                        ossData["write_bytes"] = f"{ossData['write_bytes']} OPs"
 
-                data_table += "\n" + tabulate(oss_table, headers=headers, tablefmt="psql",
-                                              stralign="left", numalign="left") + "\n\n"
+                        col = [[key, self._convert_from_byte(value) if "_bytes_" in key else str(value)]
+                                    for key, value in ossData.items()]
+                        ost_table.append(col)
+
+                    # Create OST Table
+                    oss_table = list(map(lambda x: list(chain(*x)), zip(*ost_table)))
+
+                    data_table += "\n" + tabulate(oss_table, headers=headers, tablefmt="psql",
+                                                  stralign="left", numalign="left") + "\n\n"
 
             # --------------- Files and File OPs per Jobs ------------------
-            # Map The File OPs to their MDT target
-            fileop_map = {}
-            for mdsData in data["mds_data"]:
-                for fileObj in mdsData["file_op"]:
+            # Check and see if File OPs data should be included
+            if not kwargs or kwargs.get("files", False):
+                # Map The File OPs to their MDT target
+                fileop_map = {}
+                for fileObj in data.get("fileop_data", []):
                     if fileObj["mdtTarget"] in fileop_map:
                         fileop_map[fileObj.pop("mdtTarget")].append(fileObj)
                     else:
                         fileop_map[fileObj.pop("mdtTarget")] = [fileObj]
 
-            # Create File OP Table
-            for mdt_target, fileop_lst in fileop_map.items():
-                data_table += f"[Files on ({mdt_target})]\n"
-                headers = ["Date/Time", "Node", "OP", "Mode", "File/Dir Path"]
-                table = []
-                for fileobj in fileop_lst:
-                    row = [
-                        datetime.fromtimestamp(int(fileobj["timestamp"])).strftime("%m.%d.%Y %H:%M:%S"),
-                        fileobj["nid"] if fileobj["nid"] else "N/A",
-                        fileobj["op_type"] if fileobj["op_type"] != "UNLNK" else "REMOVE",
-                        fileobj["open_mode"],
-                        self._find_absolute_path(fileobj["target_file"],
-                                                 fileobj["target_path"],
-                                                 fileobj["parent_path"])
-                    ]
-                    table.append(row)
+                # Create File OP Table
+                for mdt_target, fileop_lst in fileop_map.items():
+                    data_table += f"{Color.RED}[Files OPs: {mdt_target}]{Color.NO_COLOR}\n"
+                    headers = ["Date/Time", "Node", "OP", "Mode", "File/Dir Path"]
+                    table = []
+                    for fileobj in fileop_lst:
+                        row = [
+                            datetime.fromtimestamp(int(fileobj["file_ops"]["timestamp"])).strftime("%m.%d.%Y %H:%M:%S"),
+                            fileobj["nid"] if fileobj["nid"] else "N/A",
+                            fileobj["file_ops"]["op_type"] if fileobj["file_ops"]["op_type"] != "UNLNK" else "REMOVE",
+                            fileobj["file_ops"]["open_mode"],
+                            self._find_absolute_path(fileobj["target_file"],
+                                                     fileobj["target_path"],
+                                                     fileobj["parent_path"])
+                        ]
+                        table.append(row)
 
-                #Make table:
-                data_table += "\n" + tabulate(table, headers=headers, tablefmt="simple",
-                                              stralign="left", numalign="left") + "\n\n"
-
+                    #Make table:
+                    data_table += "\n" + tabulate(table, headers=headers, tablefmt="simple",
+                                                  stralign="left", numalign="left") + "\n"
 
             # Print
             return data_table
@@ -334,6 +368,26 @@ class RESTful_API:
         # Otherwise Print no output data
         return "** No Result Found **"
 
+
+    def get_jobscript(self, cluster, jobid):
+        """
+            Request API and get a job submission script for a particular job
+        """
+        # Calculate the uid for the job
+        url_cmd = f"/jobscript/{cluster}/{jobid}"
+        # Call the Rest API
+        api_response = self.get(url_cmd)
+        # Get Query results
+        result = api_response.get("result", None) if api_response else {}
+
+        if result:
+
+            return f"{Color.PURPLE}[Job Submission Script]\n" \
+                   f"{Color.ORANGE}JobId: ({result['jobid']})  Cluster: ({result['cluster']})\n\n" \
+                   f"{Color.NO_COLOR}{result['job_script']}"
+
+        # Otherwise Print no output data
+        return "** The Job Submission Script was not found **"
 
 
     def _gen_api_url(self, url_cmd: str, **kwargs):
@@ -349,9 +403,10 @@ class RESTful_API:
             # Extract the jobid and taskid
             jobid = kwargs.pop('jobid') if kwargs.get('jobid', None) else None
             taskid = kwargs.pop('taskid') if kwargs.get('taskid', None) else None
+            cluster = kwargs.pop('cluster') if kwargs.get('cluster', None) else None
             # Generate UID and update args
             if jobid:
-                uid = self._uniqID(jobid, taskid)
+                uid = self._uniqID(cluster, jobid, taskid)
                 kwargs.update({'uid': uid})
 
             # Construct the URL Key/Value list if applicable
@@ -365,13 +420,14 @@ class RESTful_API:
         return req_url
 
     @staticmethod
-    def _uniqID(jobid, taskid=None):
+    def _uniqID(cluster, jobid, taskid=None):
         """
         Generate the 'uid' out of jobid and taskid
         """
-        global CLUSTER_NAME, SCHEDULER
+        global CLUSTERS_SCHED
         # calculate the MD5 hash
-        obj_id = ''.join(filter(None, [SCHEDULER, CLUSTER_NAME, jobid, taskid]))
+        sched = CLUSTERS_SCHED.get(cluster, None)
+        obj_id = ''.join(filter(None, [sched, cluster, jobid, taskid]))
         hash_id = hashlib.md5(obj_id.encode(encoding='UTF=8'))
         return hash_id.hexdigest()
 
@@ -694,8 +750,8 @@ NAME
     jobs - lists all the jobs for current selected OSS/MDS server ot OST/MDT Target
     
 SYNOPSIS
-    jobs [-jtsdf][-js] content
-    jobs [--jobid][--taskid][--job-status][--files][--days][--sort] content
+    jobs [-jtcusdf][-js] content
+    jobs [--jobid][--taskid][--cluster][--username][--job-status][--files][--days][--sort] content
     
 DESCRIPTION
     Once an OSS/MDS server or a MDT/OST target is selected, the 'jobs' command can list all the
@@ -705,21 +761,26 @@ DESCRIPTION
     
     The following options are available:
     
-    -j, --jobid <job_id>        shows the record of this particular job with <job_id>
+    -j, --jobid <job_id>        Shows the record of a particular job with <job_id>
     
-    -t, --taskid <task_id>      shows the record of this particular array job with <job_id>, <task_id>
+    -t, --taskid <task_id>      Shows the record of this particular array job with <job_id>, <task_id>
                                 Once the <task_id> was specified, the <job_id> must be defined as well.
-                                (Note that the <job_id> alone will never show an array job withou taskid)
+                                (Note that the <job_id> alone will never show an array job without taskid)
+    
+    -c, --cluster <cluster>     Filters the jobs output for a particular <cluster>. Selecting this option
+                                is mandatory when -j is selected.
+                                
+    -u, --username <username>   Shows all the records that belong to a particualr user.
                                 
     -js, --job_status <status>  Search for the jobs in RUNNING or FINISHED states. <status> can be defined 
                                 as ['r', 'R'] for RUNNING jobs or ['f', 'F'] for FINISHED jobs.
     
-    -f, --file                  list all the files. This optio  is only available in MDT mode.
+    -f, --file                  Lists all the files. This option is only available on MDT mode.
     
     -d, --days <N>              Lists all the records fo N days ago.
     
-    -s, --sort <filed>          Sort the list based on the filed name.
-    
+    -s, --sort <filed>          Sorts the list based on the filed name. 
+                                ** (This option is not fully functional at this time)
         """
         print(help_msg)
 
@@ -790,15 +851,34 @@ NAME
     jobinfo - returns all the provenance information of a job
     
 SYNOPSIS
-    jobinfo -j <job_id> [-t <task_id>]
-    jobinfo --jobid <job_id> [--taskid <task_id>]
+    jobinfo -c <cluster> -j <job_id> [-t <task_id>] [-m | -o | -f]
+    
+    jobinfo --cluster <cluster> --jobid <job_id> [--taskid <task_id>] [--mds | --oss | --files]
     
 DESCRIPTION
     The 'jobinfo' command collects all the provenance information of a job including
     the I/O statistics of the job on OSSs/OSTs and metadata activities on MDSs/MDTs.
     It also provides some information regarding the job scheduler and lists all the
-    File Operations that have been done by the selected job. (Please notice that it
-    is necessary to select the <task_id> if the job is an array job.)
+    File Operations that have been done by the selected job.
+      * Defining the cluster (-c , --cluster) is mandatory
+      * Please also notice that it is necessary to select the <task_id> if the job
+        is an array job.
+           
+    The following options are available:
+    
+    -j, --jobid <job_id>        Shows provenance data of a particular job with <job_id> (Mandatory)
+    
+    -t, --taskid <task_id>      Shows the Provenance of a particular array job with <job_id> <task_id>.
+                                Once the <task_id> was defined, the <job_id> must be defined as well.
+                                (Note that the <job_id> alone will never show an array job without taskid)
+    
+    -c, --cluster <cluster>     Select the Cluster Name which the desired job comes from
+    
+    -o, --oss                   Filters the output for OSS data
+    
+    -m, --mds                   Filters the output for OSS data
+    
+    -f, --files                 Filters the output for File Operations data
         """
         print(help_msg)
 
@@ -807,15 +887,107 @@ DESCRIPTION
         """
             Show all the details regarding a job
         """
-        args_map = {'jobid': None, 'taskid': None}
+        args_map = {'cluster': None, 'jobid': None, 'taskid': None}
+        flags_list = ["oss", "mds", "files"]
+        filter_flags = {}
         arg_list = args.strip().split()
         # jobinfo needs at least one argument
         if not arg_list:
-            self._error("Please choose a job_id (and a task_id if applicable).\n "
+            self._error("Please choose the cluster_name, job_id (and a task_id if applicable).\n "
                         "For more information please refer to the help manual of 'jobinfo'")
         try:
             # Parse the arguments
-            opts, remain = getopt(arg_list, 'j:t:', ['jobid', 'taskid'])
+            opts, remain = getopt(arg_list, 'c:j:t:omf', ['cluster','jobid', 'taskid', 'oss', 'mds', 'files'])
+            # No non-argument input
+            if remain:
+                self._error(f"The '{remain}' is not a valid option")
+                return
+
+            # Collect options and their values
+            for opt, value in opts:
+                for flag in flags_list:
+                    if opt in [f"--{flag}", f"-{flag[0]}"]:
+                        filter_flags[flag] = True
+                        break
+
+                else:
+                    for key in args_map.keys():
+                        if opt in [f"--{key}", f"-{key[0]}"]:
+                            if not value:
+                                self._error(f"Please specify a value for '{opt}' option")
+                                return
+                            args_map[key] = value
+                            break
+
+            # Cluster name is mandatory
+            if not args_map['cluster']:
+                self._error("The Cluster name (-c, --cluster) has to be defined for 'jobinfo' command")
+                return
+
+            # The jobid has to be selected
+            if not args_map['jobid']:
+                self._error("The JobID (-j, --jobid) has to be defined for 'jobinfo' command")
+                return
+
+            # Get the JobInfo details from Provenance API
+            data_table = self.rest_api.get_job_detail(args_map.get("cluster"),
+                                                      args_map.get("jobid"),
+                                                      args_map.get("taskid", None),
+                                                      **filter_flags)
+            self._paginate_output(data_table)
+
+        except GetoptError as getopExp:
+            self._error(f"{getopExp}")
+
+
+    def help_jobscript(self):
+        help_msg = """
+NAME
+    jobscript - Shows the Job Submission Script of a particualr job
+    
+SYNOPSIS
+    jobscript -c <cluster> -j <job_id> 
+    jobscript --cluster <cluster> --jobid <job_id>
+    
+DESCRIPTION
+    The 'jobscript' command retrieves the content of a user's job submission script file in order
+    to allow system administrator to have a quick access to a particular job's script contents for
+    any further evaluation. Please note that collecting the job submission scripts on Provenance 
+    side falls into the following situations:
+    
+        1) Job runs long enought to allow Provenance Server locate the submitted job submission 
+           script on the spool directory of the scheduler. This is the most reliable job script
+           since it ensures no modification in the script file after the job submission.
+          
+        2) Job runs very shortly and Provenance Server never gets a chance to capture the job 
+           script from the spool directory. In that case, the Provenance tries to locate the 
+           job submission script on the user's directory and save it. This may not be reliable
+           since user might have modified the file after the job submission.
+           
+        3) Job's life time is very short and user has removed the job submission script file so 
+           far. Therefore, Provenance Server has never got a chance to capture the job submission
+           script file to store it into the database.
+           
+    ** Please note that both -c and -j flags have to be defined to retrieve a job's script
+    ** There is only one version of job submission script per JobID and array jobs do not have a 
+       separate job submission script file.
+        """
+        print(help_msg)
+
+
+    def do_jobscript(self, args):
+        """
+            Retrieve Users' Job Submission Script Content
+        """
+        args_map = {'cluster': None, 'jobid': None}
+        arg_list = args.strip().split()
+        # jobinfo needs at least one argument
+        if not arg_list:
+            self._error("Please choose the cluster_name and job_id for the 'jobscript' command.\n "
+                        "For more information please refer to the help manual of 'jobscript'")
+        try:
+            # Parse the arguments
+            opts, remain = getopt(arg_list, 'c:j:', ['cluster', 'jobid'])
             # No non-argument input
             if remain:
                 self._error(f"The '{remain}' is not a valid option")
@@ -830,13 +1002,19 @@ DESCRIPTION
                         args_map[key] = value
                         break
 
+            # Cluster name is mandatory
+            if not args_map['cluster']:
+                self._error("The Cluster name (-c, --cluster) has to be defined for 'jobscript' command")
+                return
+
             # The jobid has to be selected
             if not args_map['jobid']:
-                self._error("(-j, --jobid <job_id>) is missing")
+                self._error("The JobID (-j, --jobid) has to be defined for 'jobscript' command")
+                return
 
-            # Get the JobInfo details from Provenance API
-            data_table = self.rest_api.get_job_detail(args_map.get("jobid"), args_map.get("taskid", None))
-            self._paginate_output(data_table)
+            output_result = self.rest_api.get_jobscript(args_map.get("cluster"), args_map.get("jobid"))
+
+            self._paginate_output(output_result)
 
         except GetoptError as getopExp:
             self._error(f"{getopExp}")
@@ -876,7 +1054,11 @@ EXAMPLE
 
 
     def do_help(self, arg: str):
-        """ (help): Show the help info for the given command"""
+        """
+(help): Show the help info for the given command
+
+    help <command>
+        """
         if not arg:
             help_msg ="""
     Welcome to The PRovenance Command Line Interface (Shell). The Provenance Software Stack consists
@@ -887,15 +1069,16 @@ EXAMPLE
     and provides all the details regarding the jobs' status, IOPs on OSS servers, metadata activity on
     MDS servers, and File Operations per job. 
     
-    Following command are availabe:
+    Available Commands are:
     
-        - help      Shows this help message.
-        - show      Shows a list of OSS(s)/MDS(s) servers and their OST(s)/MDT(s) targets.
-        - select    Selects OSS/MDS server, OST/MDT target if applicable, or jobs.
-        - jobs      Lists all the jobs for current selected OSS/MDS server ot OST/MDT Target.
-        - jobinfo   Returns all the provenance information of a job.
-        - back      Returns one level back up in the server/target hierarchy.
-        - exit      Exits the command line interface. 
+        - help       Shows this help message.
+        - show       Shows a list of OSS(s)/MDS(s) servers and their OST(s)/MDT(s) targets.
+        - select     Selects OSS/MDS server, OST/MDT target if applicable, or jobs.
+        - jobs       Lists all the jobs for current selected OSS/MDS server ot OST/MDT Target.
+        - jobinfo    Returns all the provenance information of a job.
+        - jobscript  Retrieves the content of the job submission script for a particular job.
+        - back       Returns one level back up in the server/target hierarchy.
+        - exit       Exits the command line interface. 
         
     *** For more information regarding each command above, type 'help <command>' to get a help manual
             """
@@ -917,15 +1100,21 @@ EXAMPLE
         return False
 
     @staticmethod
-    def _paginate_output(output):
+    def _paginate_output(output, scroll_quit=True):
         """
             Paginate the long outputs with "less" command
+            :param scroll_quit: automatically exit if the entire file can be displayed on the first screen
         """
+        # The 'less' command that controls pagination
+        paginate_cmd = ['less', '-R', '-S', '-X', '-K']
+        # Let it quit pagination (scrolling) if entire content fits in the screen
+        if scroll_quit:
+            paginate_cmd.append('-F')
         # The less command that only paginate if number of output lines are larger
         # than the screen size. It also chop the lines to fit in one line only
-        pager = Popen(['less', '-F', '-R', '-S', '-X', '-K'], stdin=PIPE)
+        pager = Popen(paginate_cmd, stdin=PIPE)
         # Pipe the output to less
-        pager.stdin.write(f"\n{output}".encode('utf-8'))
+        pager.stdin.write(f"\n{output}\n\n".encode('utf-8'))
         # flush and send (EOF) before calling wait
         pager.stdin.close()
         # Wait for "less"
@@ -947,8 +1136,9 @@ EXAMPLE
     def _pars_jobs_args(arg: str):
         arg_map = OrderedDict()
         # A map of valid arguments that work with list command
-        valid_ops = {"jobid": ['-j', '--jobid'], "taskid": ['-t', '--taskid'], "sort": ['-s', '--sort'],
-                      "js": ['-js', '--job-status'],  "days": ['-d', '--days']}
+        valid_ops = {"jobid": ['-j', '--jobid'], "taskid": ['-t', '--taskid'], "cluster": ['-c', '--cluster'],
+                     "js": ['-js', '--job-status'],  "days": ['-d', '--days'], "user": ['-u', '--username'],
+                     "sort": ['-s', '--sort']}
 
         valid_status = {"RUNNING": ['r', 'R'], "FINISHED": ['f', 'F']}
         # Convert args to list
@@ -1006,7 +1196,15 @@ EXAMPLE
 
         # For finished jobs the number of days ago must be selected
         if arg_map.get('js', None) == "FINISHED" and not arg_map.get('days', None):
-            return {"error": f"For 'FINISHED' jobs [-d, --days] option must be defined"}
+            return {"error": f"For 'FINISHED' jobs, [-d | --days] option must be defined"}
+
+        # When JobId is defined, the cluster has to be defined too
+        if arg_map.get('jobid', None) and not arg_map.get('cluster', None):
+            return {"error": f"The cluster name must be defined by [-c | --cluster] one a 'jobid' is selected"}
+
+        # No TaskId can be defined without their JobId
+        if arg_map.get('taskid', None) and not arg_map.get('jobid', None):
+            return {"error": f"jobid must be selected by [-j | --jobid] for the given 'taskid'"}
 
         # Return arg_map
         return arg_map
@@ -1024,12 +1222,12 @@ EXAMPLE
         """
         prompt = "Provenance"
         if self.session.mode == self.Mode.JOBS:
-            prompt += " [jobs]"
+            prompt += f" [{Color.BLUE}jobs{Color.NO_COLOR}]"
         elif self.session.mode == self.Mode.SERVER:
-            prompt += f" [{self.session.serverName}]"
+            prompt += f" [{Color.GREEN}{self.session.serverName}{Color.NO_COLOR}]"
         elif self.session.mode == self.Mode.TARGET:
-            prompt += f" [{self.session.serverName}]->"
-            prompt += f"({self.session.targetName})"
+            prompt += f" [{Color.GREEN}{self.session.serverName}{Color.NO_COLOR}]->"
+            prompt += f"[{Color.RED_L}{self.session.targetName}{Color.NO_COLOR}]"
         prompt += "> "
         self.prompt = prompt
         
@@ -1089,6 +1287,22 @@ EXAMPLE
                 return cls.JOBS
             else:
                 return cls.TARGET
+
+
+class Color:
+    """
+        ANSI codes for terminal colors
+    """
+    NO_COLOR = "\033[0m"
+    RED = "\033[0;31m"
+    RED_L = "\033[1;31m"
+    GREEN = "\033[0;32m"
+    BLUE = "\033[1;34m"
+    CYAN = "\033[0;36m"
+    YELLOW = "\033[1;33m"
+    ORANGE = "\033[0;33m"
+    PURPLE = "\033[0;35m"
+    GREEN_L = "\033[1;32m"
 
 
 
