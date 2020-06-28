@@ -540,7 +540,7 @@ DESCRIPTION
     This command prints a list of available Lustre servers (OSS/MDS) that can be selected by
     'select' command. It will also show the server targets (by adding 'target' option) once 
     an OSS or MDS server is selected. If no servers is selected, 'show target' cannot show
-    a list of corresponding targets.
+    the list of corresponding targets.
 
 EXAMPLES
     Provenance> show
@@ -604,7 +604,7 @@ EXAMPLES
     def help_select(self):
         help_msg = """
 NAME
-    select - select OSS/MDS server, OST/MDT target if applicable, or jobs
+    select - select OSS/MDS server, (or OST/MDT target if applicable), or cluster jobs
     
 SYNOPSIS
     select [server | [target]] <server_name>|<target_name>
@@ -612,9 +612,10 @@ SYNOPSIS
     select jobs
     
 DESCRIPTION
-    Select command has two modes: 1) 'Server/Target' mode 2) 'Jobs' mode. User can select a lustre server 
-    (i.e. OSS or MDS) or the 'jobs' mode at any moment. But can only select a Target only once a 'server' 
-    is selected. the 'list' command works only when a Server, Target, or 'Jobs' mode is selected.
+    Select command has three modes: 1) 'Server' mode 3) 'Target' mode, and 3) 'Jobs' mode. User can select 
+    a lustre server (i.e. OSS or MDS) or the 'jobs' mode at any moment. But can only select a Target only  
+    once a 'server' is selected. the 'jobs' command works only when a Server, Target, or 'Jobs' mode is 
+    selected.
     
 EXAMPLE
      Provenance> select server oss1
@@ -759,7 +760,7 @@ DESCRIPTION
     current RUNNING jobs on these servers/targets. If a MDT/OST is selected, then list of the jobs 
     will be filtered for that selected target.
     
-    The following options are available:
+OPTIONS
     
     -j, --jobid <job_id>        Shows the record of a particular job with <job_id>
     
@@ -848,7 +849,7 @@ DESCRIPTION
     def help_jobinfo(self):
         help_msg = """
 NAME
-    jobinfo - returns all the provenance information of a job
+    jobinfo - returns all the provenance information of a particular job
     
 SYNOPSIS
     jobinfo -c <cluster> -j <job_id> [-t <task_id>] [-m | -o | -f]
@@ -864,7 +865,7 @@ DESCRIPTION
       * Please also notice that it is necessary to select the <task_id> if the job
         is an array job.
            
-    The following options are available:
+OPTIONS
     
     -j, --jobid <job_id>        Shows provenance data of a particular job with <job_id> (Mandatory)
     
