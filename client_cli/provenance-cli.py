@@ -1106,20 +1106,23 @@ EXAMPLE
             Paginate the long outputs with "less" command
             :param scroll_quit: automatically exit if the entire file can be displayed on the first screen
         """
-        # The 'less' command that controls pagination
-        paginate_cmd = ['less', '-R', '-S', '-X', '-K']
-        # Let it quit pagination (scrolling) if entire content fits in the screen
-        if scroll_quit:
-            paginate_cmd.append('-F')
-        # The less command that only paginate if number of output lines are larger
-        # than the screen size. It also chop the lines to fit in one line only
-        pager = Popen(paginate_cmd, stdin=PIPE)
-        # Pipe the output to less
-        pager.stdin.write(f"\n{output}\n\n".encode('utf-8'))
-        # flush and send (EOF) before calling wait
-        pager.stdin.close()
-        # Wait for "less"
-        pager.wait()
+        try:
+            # The 'less' command that controls pagination
+            paginate_cmd = ['less', '-R', '-S', '-X', '-K']
+            # Let it quit pagination (scrolling) if entire content fits in the screen
+            if scroll_quit:
+                paginate_cmd.append('-F')
+            # The less command that only paginate if number of output lines are larger
+            # than the screen size. It also chop the lines to fit in one line only
+            pager = Popen(paginate_cmd, stdin=PIPE)
+            # Pipe the output to less
+            pager.stdin.write(f"\n{output}\n\n".encode('utf-8'))
+            # flush and send (EOF) before calling wait
+            pager.stdin.close()
+            # Wait for "less"
+            pager.wait()
+        except BrokenPipeError:
+            pass
 
     @staticmethod
     def _parse_arg(arg: str):
