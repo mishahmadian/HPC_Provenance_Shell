@@ -187,12 +187,17 @@ class RESTful_API:
         results = api_response.get("result", None) if api_response else {}
 
         if results:
-            headers = ["Cluster", "JobID", "TaskID", "JobName", "User", "Stauts", "Project", "PE", "# CPU",
+            # headers = ["Cluster", "JobID", "TaskID", "JobName", "User", "Stauts", "Project", "PE", "# CPU",
+            #            "Submitted", "Started", "Finished"]
+            headers = ["Cluster", "Scheduler", "JobID", "TaskID", "JobName", "User", "Stauts", "# CPU",
                        "Submitted", "Started", "Finished"]
+
             table = []
             for data in results:
-                row = [data["cluster"], data["jobid"], data["taskid"], data["jobName"], data["username"],
-                       data["status"], data["project"], data["parallelEnv"], data["num_cpu"]]
+                # row = [data["cluster"], data["jobid"], data["taskid"], data["jobName"], data["username"],
+                #        data["status"], data["project"], data["parallelEnv"], data["num_cpu"]]
+                row = [data["cluster"], data["sched_type"], data["jobid"], data["taskid"], data["jobName"], data["username"],
+                       data["status"], data["num_cpu"]]
 
                 # Convert epoch timestamps to readable date/time format
                 for timestamp in [data["submit_time"], data["start_time"], data["end_time"]]:
@@ -208,12 +213,12 @@ class RESTful_API:
         # Otherwise Print no output data
         return "** No Result Found **"
 
-    def get_job_detail(self, cluster, jobid, taskid, **kwargs):
+    def get_job_detail(self, cluster, sched, jobid, taskid, **kwargs):
         """
             Request API and get all the details regarding a job
         """
         # Calculate the uid for the job
-        uid = self._uniqID(cluster, jobid, taskid)
+        uid = self._uniqID(cluster, sched, jobid, taskid)
         url_cmd = f"/jobinfo/{uid}"
         # Call the Rest API
         api_response = self.get(url_cmd)
@@ -223,12 +228,16 @@ class RESTful_API:
         if results and results[0]:
             data = results[0]
             data_table = f"{Color.CYAN}[JOB INFO]{Color.NO_COLOR}\n\n"
-            headers = ["Cluster", "JobID", "TaskID", "JobName", "User", "Stauts", "Project", "PE", "# CPU",
+            # headers = ["Cluster", "JobID", "TaskID", "JobName", "User", "Stauts", "Project", "PE", "# CPU",
+            #            "Submitted", "Started", "Finished"]
+            headers = ["Cluster", "Scheduler", "JobID", "TaskID", "JobName", "User", "Stauts", "# CPU",
                        "Submitted", "Started", "Finished"]
 
             #--------------- JOB INFO 1st part ------------------
-            row = [data["cluster"], data["jobid"], data["taskid"], data["jobName"], data["username"], data["status"],
-                   data["project"], data["parallelEnv"], data["num_cpu"]]
+            # row = [data["cluster"], data["jobid"], data["taskid"], data["jobName"], data["username"], data["status"],
+            #        data["project"], data["parallelEnv"], data["num_cpu"]]
+            row = [data["cluster"], data["sched_type"], data["jobid"], data["taskid"], data["jobName"], data["username"]
+                  , data["status"], data["num_cpu"]]
 
             # Convert epoch timestamps to readable date/time format
             for timestamp in [data["submit_time"], data["start_time"], data["end_time"]]:
@@ -241,11 +250,11 @@ class RESTful_API:
 
             # --------------- JOB INFO 2nd part ------------------
             headers = ["Parameters", "Values", "Parametes", "Values"]
-            col1 = [["Queue", data["queue"]], ["h_vmem", data["h_vmem"]], ["Hard Runtime", data["h_rt"]],
+            col1 = [["Queue/Partition", data["queue"]], ["Mem_Core", data["h_vmem"]], ["Hard Runtime", data["h_rt"]],
                     ["Soft Runtime", data["s_rt"]]]
 
             col2 = [["Working Directory", data["pwd"]], ["Command", data["command"]],
-                    ["Deleted Job", ', '.join(filter(None, data["q_del"]))],
+                    ["Deleted/Canceled", ', '.join(filter(None, data["q_del"]))],
                     ["Failed", ("yes" if data["failed_no"] else "No")]]
 
             two_col_tbl = [c1+c2 for c1,c2 in zip(col1, col2)]
@@ -404,9 +413,10 @@ class RESTful_API:
             jobid = kwargs.pop('jobid') if kwargs.get('jobid', None) else None
             taskid = kwargs.pop('taskid') if kwargs.get('taskid', None) else None
             cluster = kwargs.pop('cluster') if kwargs.get('cluster', None) else None
+            sched = kwargs.pop('sched') if kwargs.get('sched', None) else None
             # Generate UID and update args
             if jobid:
-                uid = self._uniqID(cluster, jobid, taskid)
+                uid = self._uniqID(cluster, sched, jobid, taskid)
                 kwargs.update({'uid': uid})
 
             # Construct the URL Key/Value list if applicable
@@ -420,13 +430,13 @@ class RESTful_API:
         return req_url
 
     @staticmethod
-    def _uniqID(cluster, jobid, taskid=None):
+    def _uniqID(cluster, sched, jobid, taskid=None):
         """
         Generate the 'uid' out of jobid and taskid
         """
         global CLUSTERS_SCHED
         # calculate the MD5 hash
-        sched = CLUSTERS_SCHED.get(cluster, None)
+        #sched = CLUSTERS_SCHED.get(cluster, None)
         obj_id = ''.join(filter(None, [sched, cluster, jobid, taskid]))
         hash_id = hashlib.md5(obj_id.encode(encoding='UTF=8'))
         return hash_id.hexdigest()
@@ -497,6 +507,7 @@ class ProvenanceShell(Cmd):
                      "|      Provenance Command Line Interface      |\n" \
                      "|                   v.1.0                     |\n" \
                      "|      High Performance Computing Center      |\n" \
+                     "|        Department of Computer Science       |\n" \
                      "|            Texas Tech University            |\n" \
                      "|=============================================|\n"
 
@@ -888,7 +899,7 @@ OPTIONS
         """
             Show all the details regarding a job
         """
-        args_map = {'cluster': None, 'jobid': None, 'taskid': None}
+        args_map = {'cluster': None, 'sched': None, 'jobid': None, 'taskid': None}
         flags_list = ["oss", "mds", "files"]
         filter_flags = {}
         arg_list = args.strip().split()
@@ -898,7 +909,7 @@ OPTIONS
                         "For more information please refer to the help manual of 'jobinfo'")
         try:
             # Parse the arguments
-            opts, remain = getopt(arg_list, 'c:j:t:omf', ['cluster','jobid', 'taskid', 'oss', 'mds', 'files'])
+            opts, remain = getopt(arg_list, 'c:s:j:t:omf', ['cluster', 'sched', 'jobid', 'taskid', 'oss', 'mds', 'files'])
             # No non-argument input
             if remain:
                 self._error(f"The '{remain}' is not a valid option")
@@ -925,6 +936,11 @@ OPTIONS
                 self._error("The Cluster name (-c, --cluster) has to be defined for 'jobinfo' command")
                 return
 
+            # Scheduler is mandatory
+            if not args_map['sched']:
+                self._error("The Scheduler type (-s, --sched) has to be defined for 'jobinfo' command")
+                return
+
             # The jobid has to be selected
             if not args_map['jobid']:
                 self._error("The JobID (-j, --jobid) has to be defined for 'jobinfo' command")
@@ -932,6 +948,7 @@ OPTIONS
 
             # Get the JobInfo details from Provenance API
             data_table = self.rest_api.get_job_detail(args_map.get("cluster"),
+                                                      args_map.get("sched"),
                                                       args_map.get("jobid"),
                                                       args_map.get("taskid", None),
                                                       **filter_flags)
